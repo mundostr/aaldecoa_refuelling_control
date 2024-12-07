@@ -3,6 +3,7 @@
  * Dirección I2C por defecto sensor: 0X6D
  * https://cfsensor.com/wp-content/uploads/2022/11/XGZP6859D-Pressure-Sensor-V2.8.pdf
  * https://285624.selcdn.ru/syms1/iblock/86d/86de8d04aca354b601bbe58fb5c83577/e8405e72be3d9a460e4616f02ff6572d.pdf
+ * https://github.com/fanfanlatulipe26/XGZP6897D
  * 
  * Lecturas:
  * 0.5 46.900
@@ -14,7 +15,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <XGZP6897D.h> // https://github.com/fanfanlatulipe26/XGZP6897D
+#include <XGZP6897D.h>
 
 #define DEBUG
 #define I2C_device_address 0x6D
@@ -23,10 +24,26 @@
 #define SERIAL_BAUDS 115200
 #define PRESSURE_SENSOR_K_FACTOR 64 // 0-100 kPa
 #define PRESSURE_SENSOR_FREQ 1000
+#define POT_PIN 3
+#define PUMP_CONTROL_PIN 8
+#define PRESSURE_MIN 0.1 // bar
+#define PRESSURE_MAX 0.5
+#define HYSTERESIS 0.03
+#define ADC_RESOLUTION 4096 // 12 bits
 
 XGZP6897D pressureSensor(PRESSURE_SENSOR_K_FACTOR);
 
 void sensor_task(void* parameter);
+
+float mapPressure(float analogValue) {
+    return map(analogValue, 0, ADC_RESOLUTION, PRESSURE_MIN * 100, PRESSURE_MAX * 100) / 100.0;
+}
+
+void init_ios() {
+    pinMode(POT_PIN, INPUT);
+    pinMode(PUMP_CONTROL_PIN, OUTPUT);
+    digitalWrite(PUMP_CONTROL_PIN, LOW);
+}
 
 void scan_i2c_devices() {
     uint8_t error, address;
@@ -76,11 +93,25 @@ float read_sensor() {
 }
 
 void sensor_task(void* parameter) {
+    float targetPressure = 0.0;
+    bool pumpOn = false;
+
     while (true) {
-        float reading = read_sensor();
+        float currentPressurePa = read_sensor();
+        float currentPressureBar = currentPressurePa / 100000.0;
+        int potValue = analogRead(POT_PIN);
+        targetPressure = mapPressure(potValue);
+
+        if (currentPressureBar < targetPressure - HYSTERESIS) {
+            digitalWrite(PUMP_CONTROL_PIN, HIGH);
+            pumpOn = true;
+        } else if (currentPressureBar > targetPressure + HYSTERESIS) {
+            digitalWrite(PUMP_CONTROL_PIN, LOW);
+            pumpOn = false;
+        }
 
         #ifdef DEBUG
-        Serial.printf("Lectura: %.1f Pa\n", reading);
+        Serial.printf("Lectura: %.2f bar, obj: %.2f bar, bomba: %s\n", currentPressureBar, targetPressure, pumpOn ? "ON" : "OFF");
         #endif
         
         vTaskDelay(PRESSURE_SENSOR_FREQ / portTICK_PERIOD_MS);
@@ -95,6 +126,7 @@ void setup() {
 
     init_i2c();
     init_sensor();
+    init_ios();
 }
 
 void loop() {
