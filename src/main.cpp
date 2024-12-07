@@ -13,27 +13,36 @@
  * 0.1 9.200
  */
 
-#include <Arduino.h>
 #include <Wire.h>
+#include <Arduino.h>
+#include <algorithm>
 #include <XGZP6897D.h>
 
-#define DEBUG
-#define I2C_device_address 0x6D
+#define POT_PIN 3
 #define SDA_PIN 6
 #define SCL_PIN 7
+#define PUMP_PIN 8
+
+#define DEBUG
 #define SERIAL_BAUDS 115200
-#define PRESSURE_SENSOR_K_FACTOR 64 // 0-100 kPa
-#define PRESSURE_SENSOR_FREQ 1000
-#define POT_PIN 3
-#define PUMP_CONTROL_PIN 8
 #define PRESSURE_MIN 0.1 // bar
 #define PRESSURE_MAX 0.5
-#define HYSTERESIS 0.03
+#define PRESSURE_OFFSET 600 // en kPa
+#define PRESSURE_SAMPLES 10
+#define PRESSURE_SENSOR_K 64 // 0-100 kPa
+#define PRESSURE_HYSTERESIS 0.03
+#define PUMP_ADJUST_INTERVAL 1000
+#define MEDIAN_READ_INTERVAL 50
 #define ADC_RESOLUTION 4096 // 12 bits
 
-XGZP6897D pressureSensor(PRESSURE_SENSOR_K_FACTOR);
+int sampleIndex = 0;
+bool samplesReady = false;
+float readingSamples[PRESSURE_SAMPLES];
+
+XGZP6897D pressureSensor(PRESSURE_SENSOR_K);
 
 void sensor_task(void* parameter);
+void pump_task(void* parameter);
 
 float mapPressure(float analogValue) {
     return map(analogValue, 0, ADC_RESOLUTION, PRESSURE_MIN * 100, PRESSURE_MAX * 100) / 100.0;
@@ -41,8 +50,8 @@ float mapPressure(float analogValue) {
 
 void init_ios() {
     pinMode(POT_PIN, INPUT);
-    pinMode(PUMP_CONTROL_PIN, OUTPUT);
-    digitalWrite(PUMP_CONTROL_PIN, LOW);
+    pinMode(PUMP_PIN, OUTPUT);
+    digitalWrite(PUMP_PIN, LOW);
 }
 
 void scan_i2c_devices() {
@@ -83,38 +92,65 @@ void init_sensor() {
     Serial.println("Sensor OK");
     #endif
 
-    xTaskCreate(sensor_task, "sensor_task", 2048, NULL, 1, NULL);
+    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 1, NULL);
+    xTaskCreate(pump_task, "pump_task", 4096, NULL, 1, NULL);
 }
 
 float read_sensor() {
     float temperature, pressure;
     pressureSensor.readSensor(temperature, pressure);
-    return pressure;
+    return pressure - PRESSURE_OFFSET;
+}
+
+void pump_task(void* parameter) {
+    float pressure = 0.0;
+
+    while(true) {
+        pressure = read_sensor();
+        
+        if (pressure != -1) {
+            readingSamples[sampleIndex] = pressure;
+            sampleIndex++;
+            
+            if (sampleIndex >= PRESSURE_SAMPLES) {
+                sampleIndex = 0;
+                samplesReady = true;
+            }
+        }
+
+        vTaskDelay(MEDIAN_READ_INTERVAL / portTICK_PERIOD_MS);
+    }
 }
 
 void sensor_task(void* parameter) {
-    float targetPressure = 0.0;
     bool pumpOn = false;
+    float medianReadingPa = 0.0;
+    float currentPressureBar = 0.0;
+    float targetPressureBar = 0.0;
 
-    while (true) {
-        float currentPressurePa = read_sensor();
-        float currentPressureBar = currentPressurePa / 100000.0;
-        int potValue = analogRead(POT_PIN);
-        targetPressure = mapPressure(potValue);
+    while(true) {
+        if (samplesReady) {
+            std::sort(readingSamples, readingSamples + PRESSURE_SAMPLES);
+            medianReadingPa = readingSamples[PRESSURE_SAMPLES / 2];
+            currentPressureBar = medianReadingPa / 100000.0;
+            targetPressureBar = mapPressure(analogRead(POT_PIN));
 
-        if (currentPressureBar < targetPressure - HYSTERESIS) {
-            digitalWrite(PUMP_CONTROL_PIN, HIGH);
-            pumpOn = true;
-        } else if (currentPressureBar > targetPressure + HYSTERESIS) {
-            digitalWrite(PUMP_CONTROL_PIN, LOW);
-            pumpOn = false;
+            if (currentPressureBar < targetPressureBar - PRESSURE_HYSTERESIS) {
+                digitalWrite(PUMP_PIN, HIGH);
+                pumpOn = true;
+            } else if (currentPressureBar > targetPressureBar + PRESSURE_HYSTERESIS) {
+                digitalWrite(PUMP_PIN, LOW);
+                pumpOn = false;
+            }
+
+            #ifdef DEBUG
+            Serial.printf("Lectura: %.2f bar, obj: %.2f bar, bomba: %s\n", currentPressureBar, targetPressureBar, pumpOn ? "ON" : "OFF");
+            #endif
+            
+            samplesReady = false;
         }
-
-        #ifdef DEBUG
-        Serial.printf("Lectura: %.2f bar, obj: %.2f bar, bomba: %s\n", currentPressureBar, targetPressure, pumpOn ? "ON" : "OFF");
-        #endif
         
-        vTaskDelay(PRESSURE_SENSOR_FREQ / portTICK_PERIOD_MS);
+        vTaskDelay(PUMP_ADJUST_INTERVAL / portTICK_PERIOD_MS);
     }
 }
 
