@@ -137,10 +137,16 @@ void sensor_task(void* parameter) {
     float currentPressureBar = 0.0;
     float targetPressureBar = 0.0;
     float batteryVoltage = 0.0;
+    int batteryCheckCounter = 0;
 
     while(true) {
-        batteryVoltage = read_battery_voltage();
-        digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
+        batteryCheckCounter++;
+
+        if (batteryCheckCounter == 10) {
+            batteryVoltage = read_battery_voltage();
+            digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
+            batteryCheckCounter = 0;
+        }
 
         if (samplesReady) {
             std::sort(readingSamples, readingSamples + PRESSURE_SAMPLES);
