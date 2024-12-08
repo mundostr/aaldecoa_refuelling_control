@@ -5,7 +5,7 @@
  * https://285624.selcdn.ru/syms1/iblock/86d/86de8d04aca354b601bbe58fb5c83577/e8405e72be3d9a460e4616f02ff6572d.pdf
  * https://github.com/fanfanlatulipe26/XGZP6897D
  * 
- * Lecturas:
+ * Lecturas referencia:
  * 0.5 46.900, 0.4 36.300, 0.3 27.350, 0.2 18.500, 0.1 9.200
  */
 
@@ -26,9 +26,9 @@
 #define BATTERY_DIVIDER 4.647 // resistencias de 27k y 100k
 #define BATTERY_LOW 3.3
 #define PRESSURE_MIN 0.1 // bar
-#define PRESSURE_MAX 0.5
+#define PRESSURE_MAX 0.5 // rango para mapear pote
 #define PRESSURE_OFFSET 600 // en kPa
-#define PRESSURE_SAMPLES 10
+#define PRESSURE_SAMPLES 10 // lecturas para la mediana
 #define PRESSURE_SENSOR_K 64 // 0-100 kPa
 #define PRESSURE_HYSTERESIS 0.03
 #define PUMP_ADJUST_INTERVAL 250
@@ -36,8 +36,8 @@
 #define ADC_RESOLUTION 4096 // 12 bits
 
 int sampleIndex = 0;
-bool samplesReady = false;
 float readingSamples[PRESSURE_SAMPLES];
+bool samplesReady = false;
 
 XGZP6897D pressureSensor(PRESSURE_SENSOR_K);
 
@@ -46,6 +46,25 @@ void pump_task(void* parameter);
 
 float mapPressure(float analogValue) {
     return map(analogValue, 0, ADC_RESOLUTION, PRESSURE_MIN * 100, PRESSURE_MAX * 100) / 100.0;
+}
+
+float read_battery_voltage() {
+    int adcValue = analogRead(BATTERY_PIN);
+    float vOut = (adcValue / (float)(ADC_RESOLUTION - 1)) * 3.3;
+    float vIn = vOut * BATTERY_DIVIDER;
+    return vIn;
+}
+
+void verifyBattery() {
+    static float batteryVoltage = 0.0;
+    static int batteryCheckCounter = 0;
+
+    batteryCheckCounter++;
+    if (batteryCheckCounter == 10) {
+        batteryVoltage = read_battery_voltage();
+        digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
+        batteryCheckCounter = 0;
+    }
 }
 
 void scan_i2c_devices() {
@@ -104,13 +123,6 @@ float read_sensor() {
     return pressure - PRESSURE_OFFSET;
 }
 
-float read_battery_voltage() {
-    int adcValue = analogRead(BATTERY_PIN);
-    float vOut = (adcValue / (float)(ADC_RESOLUTION - 1)) * 3.3;
-    float vIn = vOut * BATTERY_DIVIDER;
-    return vIn;
-}
-
 void pump_task(void* parameter) {
     float pressure = 0.0;
 
@@ -136,18 +148,8 @@ void sensor_task(void* parameter) {
     float medianReadingPa = 0.0;
     float currentPressureBar = 0.0;
     float targetPressureBar = 0.0;
-    float batteryVoltage = 0.0;
-    int batteryCheckCounter = 0;
 
     while(true) {
-        batteryCheckCounter++;
-
-        if (batteryCheckCounter == 10) {
-            batteryVoltage = read_battery_voltage();
-            digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
-            batteryCheckCounter = 0;
-        }
-
         if (samplesReady) {
             std::sort(readingSamples, readingSamples + PRESSURE_SAMPLES);
             medianReadingPa = readingSamples[PRESSURE_SAMPLES / 2];
@@ -168,6 +170,8 @@ void sensor_task(void* parameter) {
             
             samplesReady = false;
         }
+
+        verifyBattery();
         
         vTaskDelay(PUMP_ADJUST_INTERVAL / portTICK_PERIOD_MS);
     }
@@ -185,4 +189,5 @@ void setup() {
 }
 
 void loop() {
+    delay(1);
 }
