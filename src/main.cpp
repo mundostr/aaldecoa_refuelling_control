@@ -6,11 +6,7 @@
  * https://github.com/fanfanlatulipe26/XGZP6897D
  * 
  * Lecturas:
- * 0.5 46.900
- * 0.4 36.300
- * 0.3 27.350
- * 0.2 18.500
- * 0.1 9.200
+ * 0.5 46.900, 0.4 36.300, 0.3 27.350, 0.2 18.500, 0.1 9.200
  */
 
 #include <Wire.h>
@@ -18,6 +14,8 @@
 #include <algorithm>
 #include <XGZP6897D.h>
 
+#define BATTERY_PIN 2
+#define BATTERY_LED_PIN 5
 #define POT_PIN 3
 #define SDA_PIN 6
 #define SCL_PIN 7
@@ -25,14 +23,16 @@
 
 #define DEBUG
 #define SERIAL_BAUDS 115200
+#define BATTERY_DIVIDER 4.647 // resistencias de 27k y 100k
+#define BATTERY_LOW 3.3
 #define PRESSURE_MIN 0.1 // bar
 #define PRESSURE_MAX 0.5
 #define PRESSURE_OFFSET 600 // en kPa
 #define PRESSURE_SAMPLES 10
 #define PRESSURE_SENSOR_K 64 // 0-100 kPa
 #define PRESSURE_HYSTERESIS 0.03
-#define PUMP_ADJUST_INTERVAL 1000
-#define MEDIAN_READ_INTERVAL 50
+#define PUMP_ADJUST_INTERVAL 250
+#define MEDIAN_READ_INTERVAL 30
 #define ADC_RESOLUTION 4096 // 12 bits
 
 int sampleIndex = 0;
@@ -46,12 +46,6 @@ void pump_task(void* parameter);
 
 float mapPressure(float analogValue) {
     return map(analogValue, 0, ADC_RESOLUTION, PRESSURE_MIN * 100, PRESSURE_MAX * 100) / 100.0;
-}
-
-void init_ios() {
-    pinMode(POT_PIN, INPUT);
-    pinMode(PUMP_PIN, OUTPUT);
-    digitalWrite(PUMP_PIN, LOW);
 }
 
 void scan_i2c_devices() {
@@ -73,6 +67,14 @@ void scan_i2c_devices() {
     }
 
     Serial.println(nDevices == 0 ? "No se encontraron dispositivos\n": "Scan finalizado\n");
+}
+
+void init_ios() {
+    pinMode(POT_PIN, INPUT);
+    pinMode(PUMP_PIN, OUTPUT);
+    pinMode(BATTERY_PIN, INPUT);
+    pinMode(BATTERY_LED_PIN, OUTPUT);
+    digitalWrite(PUMP_PIN, LOW);
 }
 
 void init_i2c() {
@@ -102,6 +104,13 @@ float read_sensor() {
     return pressure - PRESSURE_OFFSET;
 }
 
+float read_battery_voltage() {
+    int adcValue = analogRead(BATTERY_PIN);
+    float vOut = (adcValue / (float)(ADC_RESOLUTION - 1)) * 3.3;
+    float vIn = vOut * BATTERY_DIVIDER;
+    return vIn;
+}
+
 void pump_task(void* parameter) {
     float pressure = 0.0;
 
@@ -127,8 +136,12 @@ void sensor_task(void* parameter) {
     float medianReadingPa = 0.0;
     float currentPressureBar = 0.0;
     float targetPressureBar = 0.0;
+    float batteryVoltage = 0.0;
 
     while(true) {
+        batteryVoltage = read_battery_voltage();
+        digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
+
         if (samplesReady) {
             std::sort(readingSamples, readingSamples + PRESSURE_SAMPLES);
             medianReadingPa = readingSamples[PRESSURE_SAMPLES / 2];
