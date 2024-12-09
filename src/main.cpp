@@ -23,14 +23,14 @@
 
 #define DEBUG
 #define SERIAL_BAUDS 115200
-#define BATTERY_DIVIDER 4.647 // resistencias de 27k y 100k
-#define BATTERY_LOW 3.3
+#define BATTERY_DIVIDER 1.120 // resistencias de 27k y 100k
+#define BATTERY_LOW 3.6
 #define PRESSURE_MIN 0.1 // bar
 #define PRESSURE_MAX 0.5 // rango para mapear pote
 #define PRESSURE_OFFSET 600 // en kPa
 #define PRESSURE_SAMPLES 10 // lecturas para la mediana
 #define PRESSURE_SENSOR_K 64 // 0-100 kPa
-#define PRESSURE_HYSTERESIS 0.03
+#define PRESSURE_HYSTERESIS 0.011
 #define PUMP_ADJUST_INTERVAL 250
 #define MEDIAN_READ_INTERVAL 30
 #define ADC_RESOLUTION 4096 // 12 bits
@@ -64,6 +64,10 @@ void verifyBattery() {
         batteryVoltage = read_battery_voltage();
         digitalWrite(BATTERY_LED_PIN, batteryVoltage < BATTERY_LOW ? HIGH: LOW);
         batteryCheckCounter = 0;
+
+        #ifdef DEBUG
+        Serial.printf("Bateria: %.1f\n", batteryVoltage);
+        #endif
     }
 }
 
